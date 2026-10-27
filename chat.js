@@ -16,10 +16,11 @@ export default async function handler(req, res) {
     const apiKey = process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
+      console.error("[ame chat] missing OPENAI_API_KEY env var");
       return res.status(500).json({ error: "API key is missing" });
     }
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -49,23 +50,40 @@ Rules:
           ...messages
         ],
         temperature: 0.9,
-        max_tokens: 300
+        max_completion_tokens: 600,
+        reasoning_effort: "low"
       })
     });
 
-    const data = await response.json();
+    const raw = await groqRes.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      console.error("[ame chat] Groq response wasn't JSON:", raw.slice(0, 500));
+      return res.status(502).json({ error: "Upstream returned non-JSON", details: raw.slice(0, 300) });
+    }
 
-    if (!response.ok) {
-      return res.status(500).json({ 
-        error: "API error", 
-        details: data.error?.message || data 
+    if (!groqRes.ok) {
+      console.error("[ame chat] Groq API error", groqRes.status, data);
+      return res.status(502).json({
+        error: "Groq API error",
+        status: groqRes.status,
+        details: data?.error?.message || data
       });
     }
 
-    const reply = data.choices[0].message.content;
+    const reply = data?.choices?.[0]?.message?.content?.trim();
+
+    if (!reply) {
+      console.error("[ame chat] empty completion from Groq:", JSON.stringify(data).slice(0, 800));
+      return res.status(200).json({ reply: "", debug: "model returned no visible content (check logs)" });
+    }
+
     return res.status(200).json({ reply });
 
   } catch (err) {
+    console.error("[ame chat] unhandled error:", err);
     return res.status(500).json({ error: err.message });
   }
 }
