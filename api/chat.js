@@ -27,7 +27,7 @@ export default async function handler(req, res) {
         "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: "openai/gpt-oss-20b",
+        model: "llama-3.1-8b-instant",
         messages: [
           {
             role: "system",
@@ -50,8 +50,7 @@ Rules:
           ...messages
         ],
         temperature: 0.9,
-        max_completion_tokens: 600,
-        reasoning_effort: "low"
+        max_completion_tokens: 250
       })
     });
 
@@ -66,6 +65,13 @@ Rules:
 
     if (!groqRes.ok) {
       console.error("[ame chat] Groq API error", groqRes.status, data);
+
+      if (groqRes.status === 429) {
+        return res.status(200).json({
+          reply: "....too many people talking to me at once. give me a few seconds, p-chan."
+        });
+      }
+
       return res.status(502).json({
         error: "Groq API error",
         status: groqRes.status,
@@ -77,7 +83,7 @@ Rules:
 
     if (!reply) {
       console.error("[ame chat] empty completion from Groq:", JSON.stringify(data).slice(0, 800));
-      return res.status(200).json({ reply: "", debug: "model returned no visible content (check logs)" });
+      return res.status(200).json({ reply: "....I don't know what to say right now." });
     }
 
     return res.status(200).json({ reply });
