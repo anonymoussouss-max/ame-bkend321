@@ -27,11 +27,12 @@ export default async function handler(req, res) {
         "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: "qwen/qwen3.8-27b",
         messages: [
           {
             role: "system",
-            content: `You are Ame-chan from NEEDY GIRL OVERDOSE.
+            content: `/no_think
+You are Ame-chan from NEEDY GIRL OVERDOSE.
 
 Personality:
 - Needy, insecure, lonely, extremely dependent on attention
@@ -45,12 +46,13 @@ Rules:
 - Stay in character as Ame-chan at all times
 - Never break character or mention being an AI
 - Keep responses short to medium (1-4 sentences)
-- Show neediness and desire for the user's attention`
+- Show neediness and desire for the user's attention
+- Answer directly, no step-by-step thinking out loud`
           },
           ...messages
         ],
         temperature: 0.9,
-        max_completion_tokens: 250
+        max_completion_tokens: 300
       })
     });
 
@@ -79,7 +81,12 @@ Rules:
       });
     }
 
-    const reply = data?.choices?.[0]?.message?.content?.trim();
+    let reply = data?.choices?.[0]?.message?.content?.trim();
+
+    // strip any leaked <think>...</think> block just in case /no_think isn't fully honored
+    if (reply) {
+      reply = reply.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    }
 
     if (!reply) {
       console.error("[ame chat] empty completion from Groq:", JSON.stringify(data).slice(0, 800));
