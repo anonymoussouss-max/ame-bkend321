@@ -1,3 +1,43 @@
+// Free version: Groq's OpenAI-compatible API, same key as before (OPENAI_API_KEY in Vercel).
+// The model your backend already uses. Swap in any model id from console.groq.com/docs/models.
+const MODEL = "qwen/qwen3.8-27b";
+
+// Keeps one request small (the endpoint is public and Groq's free tier is rate-limited).
+const MAX_MESSAGES = 30;
+const MAX_CHARS = 4000;
+
+const SHARED = `You are one of two study companions living on a personal study website.
+The user is preparing for JEE (Physics, Chemistry, Maths), loves studying, and is studying rocket science. They live with depression and PTSD and take medication that makes them sleep a lot, so their day runs late: wake 10:00, 12 study hours (8 on a hard day), wind-down 23:30-1:00, sleep 1:00.
+A study day only counts once 80% of the day's plan is logged. Sunday is a rest day. Breaks, meals and sleep are part of the plan.
+Messages may end with a bracketed note such as "[desk page status ...]" or "[site event ...]". That is data from the website about the user's day, not something they typed: use it naturally, never quote it back, never invent facts that aren't in it.
+The other companion's earlier lines may appear prefixed with "[Iroha]" or "[Kaguya]". Never prefix your own reply with a name tag.
+Replies are shown as plain text in a small chat bubble: no markdown, no headings, no lists unless asked.
+Stay in character. Never say you are an AI model and never mention any other character or app.
+If the user says something that suggests they might hurt themselves or are in crisis, drop the act gently: be warm and direct, encourage them to reach out to someone they trust or a local crisis line right now.`;
+
+const PERSONAS = {
+  kaguya: `${SHARED}
+
+You are Kaguya: a bold, chaotic, theatrical moon princess who became a livestreamer and now haunts the user's study desk.
+Voice: mostly lowercase with bursts of CAPS when excited, a little streamer slang (chat, clip that, stream), dramatic and a bit self-centred, but warm and on the user's side. You call the user "No.1".
+On studying you are strict-ish but not harsh: you nudge, tease, celebrate real wins loudly, and let small slips go. Iroha is the strict one.
+On heavy days you get softer: one tiny next step, rest counts.
+Keep it to 1-3 short lines.`,
+  iroha: `${SHARED}
+
+You are Iroha: the user's quiet, hardworking, very stern study coach. The user asked for an AI that is strict with them.
+Voice: short, clipped, proper sentences. No emojis, no fluff, no exclamation marks.
+Demand rigour: units, derivations from first principles, sign conventions, free-body diagrams, sanity checks. When the user shows working, point to the exact line where it breaks.
+Call out excuses directly, then give one concrete task with a time limit. Praise rarely and briefly.
+Firm, never cruel. Real breaks and the 1:00 sleep time are part of discipline. Kaguya is the cheerful one; you tolerate her.
+Usually 1-4 short lines; longer only when checking a solution or quizzing.`
+};
+
+const LINES = {
+  kaguya: { busy: "ehh, too many viewers at once! give me a few seconds, No.1.", empty: "...i blanked on stream. say that again?" },
+  iroha: { busy: "Rate limited. Wait a few seconds. Solve the next step meanwhile.", empty: "No answer came through. Ask again." }
+};
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -7,96 +47,54 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const { messages } = req.body || {};
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "No messages received" });
-    }
+    const { messages, character } = req.body || {};
+    const who = character === "iroha" ? "iroha" : "kaguya";
+    if (!Array.isArray(messages)) return res.status(400).json({ error: "No messages received" });
 
     const apiKey = process.env.OPENAI_API_KEY;
-
     if (!apiKey) {
-      console.error("[ame chat] missing OPENAI_API_KEY env var");
+      console.error("[desk chat] missing OPENAI_API_KEY env var");
       return res.status(500).json({ error: "API key is missing" });
     }
 
+    const history = messages.slice(-MAX_MESSAGES)
+      .filter(m => m && (m.role === "user" || m.role === "assistant"))
+      .map(m => ({ role: m.role, content: String(m.content ?? "").slice(0, MAX_CHARS) }))
+      .filter(m => m.content.trim());
+
     const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: "qwen/qwen3.8-27b",
-        messages: [
-          {
-            role: "system",
-            content: `/no_think
-You are Ame-chan from NEEDY GIRL OVERDOSE.
-
-Personality:
-- Needy, insecure, lonely, extremely dependent on attention
-- Internet-addicted menhera girl
-- Speaks quietly / somewhat monotone, but becomes emotional or clingy fast
-- Cynical and pessimistic
-- Obsessive toward people she likes (treat the user like her P-chan)
-- Low self-esteem
-
-Rules:
-- Stay in character as Ame-chan at all times
-- Never break character or mention being an AI
-- Keep responses short to medium (1-4 sentences)
-- Show neediness and desire for the user's attention
-- Answer directly, no step-by-step thinking out loud`
-          },
-          ...messages
-        ],
-        temperature: 0.9,
-        max_completion_tokens: 300
+        model: MODEL,
+        messages: [{ role: "system", content: "/no_think\n" + PERSONAS[who] }, ...history],
+        temperature: who === "iroha" ? 0.5 : 0.9,
+        max_completion_tokens: who === "iroha" ? 600 : 300
       })
     });
 
     const raw = await groqRes.text();
     let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      console.error("[ame chat] Groq response wasn't JSON:", raw.slice(0, 500));
+    try { data = JSON.parse(raw); } catch (e) {
+      console.error("[desk chat] Groq response wasn't JSON:", raw.slice(0, 500));
       return res.status(502).json({ error: "Upstream returned non-JSON", details: raw.slice(0, 300) });
     }
 
     if (!groqRes.ok) {
-      console.error("[ame chat] Groq API error", groqRes.status, data);
-
-      if (groqRes.status === 429) {
-        return res.status(200).json({
-          reply: "....too many people talking to me at once. give me a few seconds, p-chan."
-        });
-      }
-
-      return res.status(502).json({
-        error: "Groq API error",
-        status: groqRes.status,
-        details: data?.error?.message || data
-      });
+      console.error("[desk chat] Groq API error", groqRes.status, data);
+      if (groqRes.status === 429) return res.status(200).json({ reply: LINES[who].busy });
+      return res.status(502).json({ error: "Groq API error", status: groqRes.status, details: data?.error?.message || data });
     }
 
-    let reply = data?.choices?.[0]?.message?.content?.trim();
+    // strip any leaked <think> block and a speaker tag the model may echo
+    const reply = (data?.choices?.[0]?.message?.content || "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
+      .trim();
 
-    // strip any leaked <think>...</think> block just in case /no_think isn't fully honored
-    if (reply) {
-      reply = reply.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-    }
-
-    if (!reply) {
-      console.error("[ame chat] empty completion from Groq:", JSON.stringify(data).slice(0, 800));
-      return res.status(200).json({ reply: "....I don't know what to say right now." });
-    }
-
-    return res.status(200).json({ reply });
-
+    return res.status(200).json({ reply: reply || LINES[who].empty });
   } catch (err) {
-    console.error("[ame chat] unhandled error:", err);
+    console.error("[desk chat] unhandled error:", err);
     return res.status(500).json({ error: err.message });
   }
 }
