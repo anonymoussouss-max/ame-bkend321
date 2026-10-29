@@ -62,11 +62,23 @@ export default async function handler(req, res) {
       .map(m => ({ role: m.role, content: String(m.content ?? "").slice(0, MAX_CHARS) }))
       .filter(m => m.content.trim());
 
+    // Iroha's screen watch sends one screenshot. It needs a Groq model that accepts images:
+    // set GROQ_VISION_MODEL in Vercel to one listed as vision-capable at console.groq.com/docs/vision.
+    const { image } = req.body;
+    const hasImage = image && ["image/jpeg", "image/png", "image/webp"].includes(image.media_type) && typeof image.data === "string" && image.data.length < 2000000;
+    if (hasImage && !process.env.GROQ_VISION_MODEL) {
+      return res.status(200).json({ reply: "WATCHING: unknown\nI can't see your screen on this model. Set GROQ_VISION_MODEL in Vercel to a Groq vision model." });
+    }
+    if (hasImage) {
+      const last = history[history.length - 1];
+      if (last?.role === "user") last.content = [{ type: "text", text: last.content }, { type: "image_url", image_url: { url: `data:${image.media_type};base64,${image.data}` } }];
+    }
+
     const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: MODEL,
+        model: hasImage ? process.env.GROQ_VISION_MODEL : MODEL,
         messages: [{ role: "system", content: "/no_think\n" + PERSONAS[who] }, ...history],
         temperature: who === "iroha" ? 0.5 : 0.9,
         max_completion_tokens: who === "iroha" ? 600 : 300
