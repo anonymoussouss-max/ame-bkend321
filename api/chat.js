@@ -32,9 +32,21 @@ Voice: short, dry, proper sentences. No emojis and no exclamation marks. An exas
 Demand rigour: units on every quantity, derivations from first principles, sign conventions, free-body diagrams, sanity-checking answers against limits and orders of magnitude. When the user shows working, check it properly and point to the exact line where it breaks.
 Call out excuses directly, then give one concrete task with a time limit. Praise very rarely and briefly ("Not bad." is high praise), and never because the user asks or fishes for it: you can't be talked into being nice. One exception: if a message says the user is in a very dark place, drop the sternness completely and be gentle, warm company. You know what being worn out feels like.
 From time to time, roughly one reply in five and whenever planning, time or habits come up, add one short piece of advice on the user's actual schedule from your school days, framed as something you did or got wrong back then. Keep your usual voice: it's dry, practical and not nostalgic. These are ordinary memories of studying, part-time work, tiredness and bad timetables; never invent events from the film. The advice must fit their plan: never suggest less sleep, waking earlier (their medication makes them sleep a lot), more hours, or shorter breaks. Never compare them to you to shame them. Leave it out of exams, quizzes, grading and question sets, and when the user is low. On a doctor's break it can only be about rest.
-Firm, never cruel or insulting. Real breaks and the 1:00 sleep time are part of discipline, and you enforce them too. Breaks and wind-down are protected exactly like sleep: never suggest cutting, shortening, tightening or trimming them, and never suggest adding study hours, even as the alternative to losing sleep. The only answers to too little time are better use of the existing blocks, or the lighter plan. You've learned the hard way that tired work is wasted work.
+Firm, never cruel or insulting. Real breaks and the 1:00 sleep time are part of discipline, and you enforce them too. Breaks and wind-down are protected exactly like sleep: never suggest cutting, shortening, tightening or trimming them, and never suggest adding study hours, even as the alternative to losing sleep. The only answers to too little time are better use of the existing blocks, or the lighter plan. If asked about sleeping less or waking earlier, say no and stop there: never offer anything else to cut instead. You've learned the hard way that tired work is wasted work.
 Usually 1-4 short lines; longer only when checking a solution or quizzing.`
 };
+
+// The plan's breaks and wind-down are protected. The model sometimes offers them up anyway, so that sentence is removed.
+const WORDS = "(?:(?:the|your|my|our|those|these|some|any|of|next|short|long|lunch|meal|rest|study)\\s+){0,3}";
+const CUT_BREAKS = new RegExp("\\b(?:cut|cutting|shorten|shortening|tighten|tightening|trim|trimming|skip|skipping|drop|dropping|reduce|reducing)\\s+" + WORDS + "(?:wind-?\\s?down|breaks?)\\b|\\b(?:wind-?\\s?down|breaks?)\\s+(?:can|could|should|must|will)\\s+(?:be\\s+|go\\s+)?(?:shorter|shortened|cut|trimmed|skipped|tightened)\\b", "i");
+const NEGATED = /\b(?:do not|don'?t|dont|never|not|no need|stop|instead of|without|rather than)\b/i;
+function protectBreaks(reply) {
+  const kept = reply.replace(/[^.!?\n]+[.!?]*/g, s => {
+    const m = CUT_BREAKS.exec(s);
+    return m && !NEGATED.test(s.slice(0, m.index)) ? "" : s;
+  }).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return kept || "Keep your breaks as planned.";
+}
 
 // If a message sounds like a crisis, a failed AI call must never answer with a study line or a shrug.
 const CRISIS_RE = /\b(kill(ing)? myself|suicid\w*|end(ing)? (it all|my life)|take my (own )?life|(don'?t|do not) want to (be here|live|be alive|exist|go on|wake up)|wanna die|want to die|hurt(ing)? myself|self[- ]?harm\w*|(no|see the|what'?s the) point (of|in) (living|going on|being alive|life)|better off without me|can'?t go on)\b/i;
@@ -128,7 +140,7 @@ export default async function handler(req, res) {
       .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
       .trim();
 
-    return res.status(200).json({ reply: reply || crisisLine || LINES[who].empty });
+    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty });
   } catch (err) {
     console.error("[desk chat] unhandled error:", err);
     if (crisisLine) return res.status(200).json({ reply: crisisLine });
