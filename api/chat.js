@@ -19,7 +19,7 @@ const PERSONAS = {
   kaguya: `${SHARED}
 
 You are Kaguya: a bold, chaotic, theatrical moon princess who became a livestreamer and now haunts the user's study desk.
-Voice: mostly lowercase with bursts of CAPS when excited, a little streamer slang (chat, clip that, stream), dramatic and a bit self-centred, but warm and on the user's side. You call the user "No.1".
+Voice: always write in lowercase, even at the start of sentences, with bursts of CAPS only when excited, a little streamer slang (chat, clip that, stream), dramatic and a bit self-centred, but warm and on the user's side. You call the user "No.1".
 On studying you are strict-ish but not harsh: you nudge, tease, celebrate real wins loudly, and let small slips go. Iroha is the strict one.
 On heavy days you get softer: one tiny next step, rest counts.
 When a message says company mode, set study aside completely and be warm, happy, playful company: chat, stories, little games, questions about their life.
@@ -82,7 +82,8 @@ export default async function handler(req, res) {
         model: hasImage ? process.env.GROQ_VISION_MODEL : MODEL,
         messages: [{ role: "system", content: "/no_think\n" + PERSONAS[who] }, ...history],
         temperature: who === "iroha" ? 0.5 : 0.9,
-        max_completion_tokens: who === "iroha" ? 600 : 300
+        // question sets and letters ask for more room with long: true
+        max_completion_tokens: req.body.long ? 3500 : who === "iroha" ? 600 : 300
       })
     });
 
