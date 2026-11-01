@@ -128,22 +128,33 @@ export default async function handler(req, res) {
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), req.body.long || hasImage ? GEMINI_TIMEOUT_LONG : GEMINI_TIMEOUT);
-        const gemRes = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+        const started = Date.now();
+        const contents = history.map(m => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: Array.isArray(m.content)
+            ? [{ text: m.content[0].text }, { inline_data: { mime_type: image.media_type, data: image.data } }]
+            : [{ text: m.content }]
+        }));
+        const gemModel = encodeURIComponent(process.env.GEMINI_MODEL || GEMINI_MODEL);
+        const gemRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent`, {
           method: "POST",
           signal: ctrl.signal,
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${geminiKey}` },
+          headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
           body: JSON.stringify({
-            model: process.env.GEMINI_MODEL || GEMINI_MODEL,
-            messages: [{ role: "system", content: PERSONAS[who] }, ...history],
-            temperature: who === "iroha" ? 0.5 : 0.9,
-            reasoning_effort: "low",
-            // its thinking counts against this limit, so it gets extra room
-            max_tokens: (req.body.long ? 3500 : who === "iroha" ? 600 : 300) + 2000
+            systemInstruction: { parts: [{ text: PERSONAS[who] }] },
+            contents,
+            generationConfig: {
+              temperature: who === "iroha" ? 0.5 : 0.9,
+              thinkingConfig: { thinkingLevel: "low" },
+              // its thinking counts against this limit, so it gets extra room
+              maxOutputTokens: (req.body.long ? 3500 : who === "iroha" ? 600 : 300) + 2000
+            }
           })
         }).finally(() => clearTimeout(timer));
         if (gemRes.ok) {
-          const gemReply = tidy((await gemRes.json())?.choices?.[0]?.message?.content);
-          if (gemReply) return res.status(200).json({ reply: protectBreaks(gemReply) });
+          const parts = (await gemRes.json())?.candidates?.[0]?.content?.parts || [];
+          const gemReply = tidy(parts.filter(p => !p.thought).map(p => p.text || "").join(""));
+          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(gemReply) }); }
           console.error("[desk chat] Gemini returned no text, using Groq");
         } else console.error("[desk chat] Gemini error, using Groq", gemRes.status, (await gemRes.text()).slice(0, 300));
       } catch (e) { console.error("[desk chat] Gemini failed, using Groq:", e.message); }
