@@ -108,7 +108,8 @@ export default async function handler(req, res) {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: hasImage ? process.env.GROQ_VISION_MODEL : MODEL,
+        // set GROQ_MODEL in Vercel to try another model without changing this file
+        model: hasImage ? process.env.GROQ_VISION_MODEL : process.env.GROQ_MODEL || MODEL,
         messages: [{ role: "system", content: "/no_think\n" + PERSONAS[who] }, ...history],
         temperature: who === "iroha" ? 0.5 : 0.9,
         // question sets and letters ask for more room with long: true
