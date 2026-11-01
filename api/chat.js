@@ -1,6 +1,9 @@
 // Free version: Groq's OpenAI-compatible API, same key as before (OPENAI_API_KEY in Vercel).
 // The model your backend already uses. Swap in any model id from console.groq.com/docs/models.
 const MODEL = "qwen/qwen3.8-27b";
+// Gemini is used first when GEMINI_API_KEY is set in Vercel. Set GEMINI_MODEL there to pick another model.
+const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_TIMEOUT = 25000;
 
 // Keeps one request small (the endpoint is public and Groq's free tier is rate-limited).
 const MAX_MESSAGES = 30;
@@ -92,7 +95,7 @@ export default async function handler(req, res) {
     // set GROQ_VISION_MODEL in Vercel to one listed as vision-capable at console.groq.com/docs/vision.
     const { image } = req.body;
     const hasImage = image && ["image/jpeg", "image/png", "image/webp"].includes(image.media_type) && typeof image.data === "string" && image.data.length < 2000000;
-    if (hasImage && !process.env.GROQ_VISION_MODEL) {
+    if (hasImage && !process.env.GROQ_VISION_MODEL && !process.env.GEMINI_API_KEY) {
       return res.status(200).json({ reply: "WATCHING: unknown\nI can't see your screen on this model. Set GROQ_VISION_MODEL in Vercel to a Groq vision model." });
     }
     if (hasImage) {
@@ -111,6 +114,39 @@ export default async function handler(req, res) {
         max_completion_tokens: req.body.long ? 3500 : who === "iroha" ? 600 : 300
       })
     });
+
+    // strip any leaked <think> block and a speaker tag the model may echo
+    const tidy = text => String(text || "")
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
+      .trim();
+
+    // Gemini answers first. Any failure, limit or empty answer falls through to Groq.
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (geminiKey) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT);
+        const gemRes = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+          method: "POST",
+          signal: ctrl.signal,
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${geminiKey}` },
+          body: JSON.stringify({
+            model: process.env.GEMINI_MODEL || GEMINI_MODEL,
+            messages: [{ role: "system", content: PERSONAS[who] }, ...history],
+            temperature: who === "iroha" ? 0.5 : 0.9,
+            // its thinking counts against this limit, so it gets extra room
+            max_tokens: (req.body.long ? 3500 : who === "iroha" ? 600 : 300) + 2000
+          })
+        }).finally(() => clearTimeout(timer));
+        if (gemRes.ok) {
+          const gemReply = tidy((await gemRes.json())?.choices?.[0]?.message?.content);
+          if (gemReply) return res.status(200).json({ reply: protectBreaks(gemReply) });
+          console.error("[desk chat] Gemini returned no text, using Groq");
+        } else console.error("[desk chat] Gemini error, using Groq", gemRes.status, (await gemRes.text()).slice(0, 300));
+      } catch (e) { console.error("[desk chat] Gemini failed, using Groq:", e.message); }
+    }
+    if (hasImage && !process.env.GROQ_VISION_MODEL) return res.status(200).json({ reply: crisisLine || LINES[who].busy });
 
     // A short rate limit is worth one quiet retry before giving up.
     let groqRes = await callGroq();
@@ -134,11 +170,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Groq API error", status: groqRes.status, details: data?.error?.message || data });
     }
 
-    // strip any leaked <think> block and a speaker tag the model may echo
-    const reply = (data?.choices?.[0]?.message?.content || "")
-      .replace(/<think>[\s\S]*?<\/think>/gi, "")
-      .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
-      .trim();
+    const reply = tidy(data?.choices?.[0]?.message?.content);
 
     return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty });
   } catch (err) {
