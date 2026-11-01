@@ -3,7 +3,8 @@
 const MODEL = "qwen/qwen3.8-27b";
 // Gemini is used first when GEMINI_API_KEY is set in Vercel. Set GEMINI_MODEL there to pick another model.
 const GEMINI_MODEL = "gemini-flash-latest";
-const GEMINI_TIMEOUT = 25000;
+// The page gives up on a normal chat after 15 seconds, so Groq needs time left to answer.
+const GEMINI_TIMEOUT = 7000, GEMINI_TIMEOUT_LONG = 25000;
 
 // Keeps one request small (the endpoint is public and Groq's free tier is rate-limited).
 const MAX_MESSAGES = 30;
@@ -126,7 +127,7 @@ export default async function handler(req, res) {
     if (geminiKey) {
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT);
+        const timer = setTimeout(() => ctrl.abort(), req.body.long || hasImage ? GEMINI_TIMEOUT_LONG : GEMINI_TIMEOUT);
         const gemRes = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
           method: "POST",
           signal: ctrl.signal,
@@ -135,6 +136,7 @@ export default async function handler(req, res) {
             model: process.env.GEMINI_MODEL || GEMINI_MODEL,
             messages: [{ role: "system", content: PERSONAS[who] }, ...history],
             temperature: who === "iroha" ? 0.5 : 0.9,
+            reasoning_effort: "low",
             // its thinking counts against this limit, so it gets extra room
             max_tokens: (req.body.long ? 3500 : who === "iroha" ? 600 : 300) + 2000
           })
