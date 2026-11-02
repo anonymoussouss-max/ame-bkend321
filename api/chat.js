@@ -3,8 +3,8 @@
 const MODEL = "qwen/qwen3.8-27b";
 // AIRouter is used first when AIROUTER_API_KEY is set in Vercel. Set AIROUTER_MODEL there to pick another model.
 const AIROUTER_MODEL = "anthropic/claude-haiku-5.5";
-// The page gives up on a normal chat after 15 seconds, so Groq needs time left to answer.
-const AIROUTER_TIMEOUT = 11000, AIROUTER_TIMEOUT_LONG = 30000;
+// MaxonForge is tried before AIRouter when MAXONFORGE_API_KEY is set. Set MAXONFORGE_MODEL to pick another model.
+const MAXONFORGE_MODEL = "claude-fable-5-1";
 // Gemini is used next when GEMINI_API_KEY is set in Vercel. Set GEMINI_MODEL there to pick another model.
 const GEMINI_MODEL = "gemini-flash-latest";
 // The page gives up on a normal chat after 15 seconds, so Groq needs time left to answer.
@@ -78,6 +78,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  const handlerStart = Date.now();
   let crisisLine = null;
   try {
     const { messages, character } = req.body || {};
@@ -102,7 +103,7 @@ export default async function handler(req, res) {
     // set GROQ_VISION_MODEL in Vercel to one listed as vision-capable at console.groq.com/docs/vision.
     const { image } = req.body;
     const hasImage = image && ["image/jpeg", "image/png", "image/webp"].includes(image.media_type) && typeof image.data === "string" && image.data.length < 2000000;
-    if (hasImage && !process.env.GROQ_VISION_MODEL && !process.env.GEMINI_API_KEY && !process.env.AIROUTER_API_KEY) {
+    if (hasImage && !process.env.GROQ_VISION_MODEL && !process.env.GEMINI_API_KEY && !process.env.AIROUTER_API_KEY && !process.env.MAXONFORGE_API_KEY) {
       return res.status(200).json({ reply: "WATCHING: unknown\nI can't see your screen on this model. Set GROQ_VISION_MODEL in Vercel to a Groq vision model." });
     }
     if (hasImage) {
@@ -129,30 +130,38 @@ export default async function handler(req, res) {
       .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
       .trim();
 
-    // AIRouter answers first when its key is set. Any failure, limit or empty answer falls through.
-    const routerKey = process.env.AIROUTER_API_KEY;
-    if (routerKey) {
+    // Paid services answer first, in this order, when their keys are set: MaxonForge, then AIRouter.
+    // Any failure, limit or empty answer moves on to the next one. They share one time budget,
+    // so Groq still has time to answer before the page gives up.
+    const deadline = handlerStart + (req.body.long ? 45000 : hasImage ? 26000 : 13000);
+    const paid = [
+      { name: "MaxonForge", key: process.env.MAXONFORGE_API_KEY, url: "https://www.maxonforge.com/v1/chat/completions", model: process.env.MAXONFORGE_MODEL || MAXONFORGE_MODEL },
+      { name: "AIRouter", key: process.env.AIROUTER_API_KEY, url: "https://api.airouter.in/v1/chat/completions", model: process.env.AIROUTER_MODEL || AIROUTER_MODEL }
+    ];
+    for (const p of paid) {
+      const left = deadline - Date.now();
+      if (!p.key || left < 2000) continue;
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), req.body.long || hasImage ? AIROUTER_TIMEOUT_LONG : AIROUTER_TIMEOUT);
+        const timer = setTimeout(() => ctrl.abort(), left);
         const started = Date.now();
-        const routerRes = await fetch("https://api.airouter.in/v1/chat/completions", {
+        const paidRes = await fetch(p.url, {
           method: "POST",
           signal: ctrl.signal,
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${routerKey}` },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${p.key}` },
           body: JSON.stringify({
-            model: process.env.AIROUTER_MODEL || AIROUTER_MODEL,
+            model: p.model,
             messages: [{ role: "system", content: PERSONAS[who] }, ...history],
             temperature: who === "iroha" ? 0.5 : 0.9,
             max_tokens: req.body.long ? 3500 : who === "iroha" ? 1000 : 700
           })
         }).finally(() => clearTimeout(timer));
-        if (routerRes.ok) {
-          const routerReply = tidy((await routerRes.json())?.choices?.[0]?.message?.content);
-          if (routerReply) { console.log("[desk chat] AIRouter answered in", Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(routerReply) }); }
-          console.error("[desk chat] AIRouter returned no text, using backup");
-        } else console.error("[desk chat] AIRouter error, using backup", routerRes.status, (await routerRes.text()).slice(0, 300));
-      } catch (e) { console.error("[desk chat] AIRouter failed, using backup:", e.message); }
+        if (paidRes.ok) {
+          const paidReply = tidy((await paidRes.json())?.choices?.[0]?.message?.content);
+          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(paidReply) }); }
+          console.error(`[desk chat] ${p.name} returned no text, using backup`);
+        } else console.error(`[desk chat] ${p.name} error, using backup`, paidRes.status, (await paidRes.text()).slice(0, 300));
+      } catch (e) { console.error(`[desk chat] ${p.name} failed, using backup:`, e.message); }
     }
 
     // Gemini answers next if its key is set. Any failure, limit or empty answer falls through to Groq.
