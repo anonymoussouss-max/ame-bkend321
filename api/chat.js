@@ -133,7 +133,8 @@ export default async function handler(req, res) {
     // Paid services answer first, in this order, when their keys are set: MaxonForge, then AIRouter.
     // Any failure, limit or empty answer moves on to the next one. They share one time budget,
     // so Groq still has time to answer before the page gives up.
-    const deadline = handlerStart + (req.body.long ? 45000 : hasImage ? 26000 : 13000);
+    // 9 seconds leaves room for Groq and a cold start before the page's 15 second limit.
+    const deadline = handlerStart + (req.body.long ? 45000 : hasImage ? 24000 : 9000);
     const paid = [
       { name: "MaxonForge", key: process.env.MAXONFORGE_API_KEY, url: "https://www.maxonforge.com/v1/chat/completions", model: process.env.MAXONFORGE_MODEL || MAXONFORGE_MODEL },
       { name: "AIRouter", key: process.env.AIROUTER_API_KEY, url: "https://api.airouter.in/v1/chat/completions", model: process.env.AIROUTER_MODEL || AIROUTER_MODEL }
