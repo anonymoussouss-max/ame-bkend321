@@ -118,13 +118,16 @@ export default async function handler(req, res) {
       if (last?.role === "user") last.content = [{ type: "text", text: last.content }, ...imgs.map(x => ({ type: "image_url", image_url: { url: `data:${x.media_type};base64,${x.data}` } }))];
     }
 
+    // reading note pages needs no character: a short brief saves about 1500 tokens per request
+    const bulk = !!(req.body.bulk && hasImage);
+    const SYSTEM = bulk ? "You transcribe pages of a student's own handwritten or printed lecture notes into concise plain text. Follow the user's format exactly. No commentary." : PERSONAS[who];
     const callGroq = () => fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
         // set GROQ_MODEL in Vercel to try another model without changing this file
         model: hasImage ? process.env.GROQ_VISION_MODEL : process.env.GROQ_MODEL || MODEL,
-        messages: [{ role: "system", content: "/no_think\n" + PERSONAS[who] }, ...history],
+        messages: [{ role: "system", content: "/no_think\n" + SYSTEM }, ...history],
         temperature: who === "iroha" ? 0.5 : 0.9,
         // question sets and letters ask for more room with long: true
         max_completion_tokens: req.body.long ? 3500 : who === "iroha" ? 1000 : 700
@@ -141,16 +144,15 @@ export default async function handler(req, res) {
     // Any failure, limit or empty answer moves on to the next one. They share one time budget,
     // so Groq still has time to answer before the page gives up.
     // 9 seconds leaves room for Groq and a cold start before the page's 15 second limit.
-    const deadline = handlerStart + (req.body.long ? 45000 : hasImage ? 24000 : 9000);
+    // several note pages take longer to read than one screenshot
+    const deadline = handlerStart + (req.body.long ? 45000 : bulk ? 22000 : hasImage ? 24000 : 9000);
     const paid = [
       { name: "MaxonForge", key: process.env.MAXONFORGE_API_KEY, url: "https://www.maxonforge.com/v1/chat/completions", model: process.env.MAXONFORGE_MODEL || MAXONFORGE_MODEL },
       { name: "AIRouter", key: process.env.AIROUTER_API_KEY, url: "https://api.airouter.in/v1/chat/completions", model: process.env.AIROUTER_MODEL || AIROUTER_MODEL }
     ];
-    // reading many note pages is bulk work: use free Groq vision for it when GROQ_VISION_MODEL is set, and keep paid credits for chat
-    const bulkToGroq = !!(req.body.bulk && hasImage && process.env.GROQ_VISION_MODEL);
     for (const p of paid) {
       const left = deadline - Date.now();
-      if (bulkToGroq || !p.key || left < 2000) continue;
+      if (!p.key || left < 2000) continue;
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), left);
@@ -161,7 +163,7 @@ export default async function handler(req, res) {
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${p.key}` },
           body: JSON.stringify({
             model: p.model,
-            messages: [{ role: "system", content: PERSONAS[who] }, ...history],
+            messages: [{ role: "system", content: SYSTEM }, ...history],
             temperature: who === "iroha" ? 0.5 : 0.9,
             max_tokens: req.body.long ? 3500 : who === "iroha" ? 1000 : 700
           })
@@ -193,7 +195,7 @@ export default async function handler(req, res) {
           signal: ctrl.signal,
           headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
           body: JSON.stringify({
-            systemInstruction: { parts: [{ text: PERSONAS[who] }] },
+            systemInstruction: { parts: [{ text: SYSTEM }] },
             contents,
             generationConfig: {
               temperature: who === "iroha" ? 0.5 : 0.9,
