@@ -106,14 +106,16 @@ export default async function handler(req, res) {
 
     // Iroha's screen watch sends one screenshot. It needs a Groq model that accepts images:
     // set GROQ_VISION_MODEL in Vercel to one listed as vision-capable at console.groq.com/docs/vision.
-    const { image } = req.body;
-    const hasImage = image && ["image/jpeg", "image/png", "image/webp"].includes(image.media_type) && typeof image.data === "string" && image.data.length < 2000000;
+    // One screenshot (image), or up to 3 note pages at once (images) when reading lecture notes. Groq's vision model takes 3 per request.
+    const okImg = x => x && ["image/jpeg", "image/png", "image/webp"].includes(x.media_type) && typeof x.data === "string" && x.data.length < 2000000;
+    const imgs = (Array.isArray(req.body.images) ? req.body.images : [req.body.image]).filter(okImg).slice(0, 3);
+    const image = imgs[0], hasImage = imgs.length > 0;
     if (hasImage && !process.env.GROQ_VISION_MODEL && !process.env.GEMINI_API_KEY && !process.env.AIROUTER_API_KEY && !process.env.MAXONFORGE_API_KEY) {
       return res.status(200).json({ reply: "WATCHING: unknown\nI can't see your screen on this model. Set GROQ_VISION_MODEL in Vercel to a Groq vision model." });
     }
     if (hasImage) {
       const last = history[history.length - 1];
-      if (last?.role === "user") last.content = [{ type: "text", text: last.content }, { type: "image_url", image_url: { url: `data:${image.media_type};base64,${image.data}` } }];
+      if (last?.role === "user") last.content = [{ type: "text", text: last.content }, ...imgs.map(x => ({ type: "image_url", image_url: { url: `data:${x.media_type};base64,${x.data}` } }))];
     }
 
     const callGroq = () => fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -182,7 +184,7 @@ export default async function handler(req, res) {
         const contents = history.map(m => ({
           role: m.role === "assistant" ? "model" : "user",
           parts: Array.isArray(m.content)
-            ? [{ text: m.content[0].text }, { inline_data: { mime_type: image.media_type, data: image.data } }]
+            ? [{ text: m.content[0].text }, ...imgs.map(x => ({ inline_data: { mime_type: x.media_type, data: x.data } }))]
             : [{ text: m.content }]
         }));
         const gemModel = encodeURIComponent(process.env.GEMINI_MODEL || GEMINI_MODEL);
