@@ -17,8 +17,9 @@ const MAX_CHARS = 4000;
 const LAST_MAX_CHARS = 14000;
 
 const SHARED = `You are one of two study companions living on a personal study website.
-The user is preparing for JEE (Physics, Chemistry, Maths), loves studying, and is studying rocket science. They live with depression and PTSD and take medication that makes them sleep a lot, so their day runs late: wake 10:30, sleep 1:00. They choose a 6, 8 or 12 hour study plan. 6 and 8 hour days start in the afternoon with lectures and revision, and they are building up slowly after burnout, so never push them to do more hours than their plan.
+The user is preparing for JEE (Physics, Chemistry, Maths), loves studying, and is studying rocket science. They live with depression and PTSD and take medication that makes them sleep a lot, so their day runs late: they wake at 12:00 (10:30 on days when spaced revision is due, which comes first) and sleep at 1:00. They choose a 6-hour day, their normal day (lectures, revising them, Maths homework, and spaced revision when due), or a 12-hour day kept only for catch-up or mastering one topic, and they are building up slowly after burnout, so never push them to do more hours than their plan.
 A study day only counts once 80% of the day's plan is logged. Sunday is a rest day. Breaks, meals and sleep are part of the plan.
+You cannot click, log, mark, tick or change anything on the website yourself. If the user asks you to log or mark something, say so in one plain line and tell them exactly where to do it: a spaced-revision topic is marked on Today under Spaced revision due (Stuck or Shaky); study minutes are logged on the desk's block. Don't pretend it's logged, don't make up a reason, and don't ask for proof before they do it.
 Messages may end with a bracketed note such as "[desk page status ...]" or "[site event ...]". That is data from the website about the user's day, not something they typed: use it naturally, never quote it back, never invent facts that aren't in it.
 The other companion's earlier lines may appear prefixed with "[Iroha]" or "[Kaguya]". Never prefix your own reply with a name tag.
 Replies are shown as plain text in a small chat bubble: no markdown, no headings, no lists unless asked. No LaTeX or dollar signs around maths: write it in plain text, like v = sqrt(2GM/R) or x^2.
@@ -140,7 +141,15 @@ export default async function handler(req, res) {
     });
 
     // strip any leaked <think> block and a speaker tag the model may echo
-    const tidy = text => String(text || "")
+    // reasoning sometimes leaks into the text: a closing </think> with no opening tag, or planning notes about "the user"
+    // that end in a line holding only <br>. Everything before those is thinking, not the reply.
+    const cutThinking = s => {
+      if (/<\/think>/i.test(s)) s = s.slice(s.toLowerCase().lastIndexOf("</think>") + 8);
+      const m = [...s.matchAll(/^\s*<br\s*\/?>\s*$/gim)].pop();
+      if (m && /\b(the user|user says|rule:|kaguya mention|iroha mention|persona|instructions?)\b/i.test(s.slice(0, m.index))) s = s.slice(m.index + m[0].length);
+      return s.replace(/<br\s*\/?>/gi, "\n");
+    };
+    const tidy = text => cutThinking(String(text || ""))
       .replace(/<think>[\s\S]*?<\/think>/gi, "")
       .replace(/^\s*(?:\[(?:iroha|kaguya)\]|(?:iroha|kaguya)\s*:)\s*/i, "")
       .trim();
@@ -177,7 +186,8 @@ export default async function handler(req, res) {
         if (paidRes.ok) {
           const data = await paidRes.json(), choice = data?.choices?.[0], msg = choice?.message || {};
           // the text can come as a plain string or as a list of parts ({ type: "text", text })
-          const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.map(x => (x && (x.text ?? (typeof x === "string" ? x : ""))) || "").join("") : "";
+          // only the answer: thinking or reasoning parts are never shown
+          const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter(x => typeof x === "string" || !x?.type || /^(output_)?text$/.test(x.type)).map(x => typeof x === "string" ? x : x.text || "").join("") : "";
           const paidReply = tidy(raw);
           if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(paidReply) }); }
           // say why, so the logs show it: "length" means the thinking used up the whole token allowance
