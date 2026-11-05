@@ -19,6 +19,7 @@ const LAST_MAX_CHARS = 14000;
 const SHARED = `You are one of two study companions living on a personal study website.
 The user is preparing for JEE (Physics, Chemistry, Maths), loves studying, and is studying rocket science. They live with depression and PTSD and take medication that makes them sleep a lot, so their day runs late: they wake at 12:00 (10:30 on days when spaced revision is due, which comes first) and sleep at 1:00. They choose a 6-hour day, their normal day (lectures, revising them, Maths homework, and spaced revision when due), or a 12-hour day kept only for catch-up or mastering one topic, and they are building up slowly after burnout, so never push them to do more hours than their plan.
 A study day only counts once 80% of the day's plan is logged. Sunday is a rest day. Breaks, meals and sleep are part of the plan.
+Think silently. Your reply is only what you say to the user: never write your reasoning, plans, checks of these instructions, or notes about "the user" in it.
 You cannot click, log, mark, tick or change anything on the website yourself. If the user asks you to log or mark something, say so in one plain line and tell them exactly where to do it: a spaced-revision topic is marked on Today under Spaced revision due (Stuck or Shaky); study minutes are logged on the desk's block. Don't pretend it's logged, don't make up a reason, and don't ask for proof before they do it.
 Messages may end with a bracketed note such as "[desk page status ...]" or "[site event ...]". That is data from the website about the user's day, not something they typed: use it naturally, never quote it back, never invent facts that aren't in it.
 The other companion's earlier lines may appear prefixed with "[Iroha]" or "[Kaguya]". Never prefix your own reply with a name tag.
@@ -147,6 +148,10 @@ export default async function handler(req, res) {
       if (/<\/think>/i.test(s)) s = s.slice(s.toLowerCase().lastIndexOf("</think>") + 8);
       const m = [...s.matchAll(/^\s*<br\s*\/?>\s*$/gim)].pop();
       if (m && /\b(the user|user says|rule:|kaguya mention|iroha mention|persona|instructions?)\b/i.test(s.slice(0, m.index))) s = s.slice(m.index + m[0].length);
+      // planning paragraphs with no tags: drop every opening paragraph up to the last one that talks about "the user" or the rules
+      const paras = s.split(/\n\s*\n/), META = /\b(the user|user (asks|says|wants|wrote|earlier)|rule:|keep (it )?(short|tight)|1-4 (short )?lines|avoid opening|must admit|kaguya mention|iroha mention|persona|these instructions|no markdown)\b/i;
+      let lastMeta = -1; paras.forEach((x, i) => { if (META.test(x)) lastMeta = i; });
+      if (lastMeta >= 0 && lastMeta < paras.length - 1 && META.test(paras[0])) s = paras.slice(lastMeta + 1).join("\n\n");
       return s.replace(/<br\s*\/?>/gi, "\n");
     };
     const tidy = text => cutThinking(String(text || ""))
@@ -189,7 +194,7 @@ export default async function handler(req, res) {
           // only the answer: thinking or reasoning parts are never shown
           const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter(x => typeof x === "string" || !x?.type || /^(output_)?text$/.test(x.type)).map(x => typeof x === "string" ? x : x.text || "").join("") : "";
           const paidReply = tidy(raw);
-          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(paidReply) }); }
+          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); res.setHeader?.("X-Provider", p.name); return res.status(200).json({ reply: protectBreaks(paidReply), provider: p.name }); }
           // say why, so the logs show it: "length" means the thinking used up the whole token allowance
           console.error(`[desk chat] ${p.name} returned no text, using backup. finish_reason=${choice?.finish_reason} message keys=${Object.keys(msg).join(",")} usage=${JSON.stringify(data?.usage || {})}`);
         } else console.error(`[desk chat] ${p.name} error, using backup`, paidRes.status, (await paidRes.text()).slice(0, 300));
@@ -228,7 +233,7 @@ export default async function handler(req, res) {
         if (gemRes.ok) {
           const parts = (await gemRes.json())?.candidates?.[0]?.content?.parts || [];
           const gemReply = tidy(parts.filter(p => !p.thought).map(p => p.text || "").join(""));
-          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(gemReply) }); }
+          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); res.setHeader?.("X-Provider", "Gemini"); return res.status(200).json({ reply: protectBreaks(gemReply), provider: "Gemini" }); }
           console.error("[desk chat] Gemini returned no text, using Groq");
         } else console.error("[desk chat] Gemini error, using Groq", gemRes.status, (await gemRes.text()).slice(0, 300));
       } catch (e) { console.error("[desk chat] Gemini failed, using Groq:", e.message); }
@@ -259,7 +264,8 @@ export default async function handler(req, res) {
 
     const reply = tidy(data?.choices?.[0]?.message?.content);
 
-    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty });
+    res.setHeader?.("X-Provider", "Groq");
+    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty, provider: "Groq" });
   } catch (err) {
     console.error("[desk chat] unhandled error:", err);
     if (crisisLine) return res.status(200).json({ reply: crisisLine });
