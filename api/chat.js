@@ -13,6 +13,8 @@ const GEMINI_TIMEOUT = 7000, GEMINI_TIMEOUT_LONG = 25000;
 // Keeps one request small (the endpoint is public and Groq's free tier is rate-limited).
 const MAX_MESSAGES = 30;
 const MAX_CHARS = 4000;
+// your latest message also carries the site's notes (plan, session, revision instructions, the notes outline), so it gets more room
+const LAST_MAX_CHARS = 14000;
 
 const SHARED = `You are one of two study companions living on a personal study website.
 The user is preparing for JEE (Physics, Chemistry, Maths), loves studying, and is studying rocket science. They live with depression and PTSD and take medication that makes them sleep a lot, so their day runs late: wake 10:30, sleep 1:00. They choose a 6, 8 or 12 hour study plan. 6 and 8 hour days start in the afternoon with lectures and revision, and they are building up slowly after burnout, so never push them to do more hours than their plan.
@@ -96,7 +98,7 @@ export default async function handler(req, res) {
 
     const history = messages.slice(-MAX_MESSAGES)
       .filter(m => m && (m.role === "user" || m.role === "assistant"))
-      .map(m => ({ role: m.role, content: String(m.content ?? "").slice(0, MAX_CHARS) }))
+      .map((m, i, all) => ({ role: m.role, content: String(m.content ?? "").slice(0, i === all.length - 1 ? LAST_MAX_CHARS : MAX_CHARS) }))
       .filter(m => m.content.trim());
 
     // the words typed, without the notes the page adds after them
@@ -142,9 +144,11 @@ export default async function handler(req, res) {
       { name: "MaxonForge", key: process.env.MAXONFORGE_API_KEY, url: "https://www.maxonforge.com/v1/chat/completions", model: process.env.MAXONFORGE_MODEL || MAXONFORGE_MODEL },
       { name: "AIRouter", key: process.env.AIROUTER_API_KEY, url: "https://api.airouter.in/v1/chat/completions", model: process.env.AIROUTER_MODEL || AIROUTER_MODEL }
     ];
+    // reading many note pages is bulk work: use free Groq vision for it when GROQ_VISION_MODEL is set, and keep paid credits for chat
+    const bulkToGroq = !!(req.body.bulk && hasImage && process.env.GROQ_VISION_MODEL);
     for (const p of paid) {
       const left = deadline - Date.now();
-      if (!p.key || left < 2000) continue;
+      if (bulkToGroq || !p.key || left < 2000) continue;
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), left);
