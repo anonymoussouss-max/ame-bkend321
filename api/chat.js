@@ -165,13 +165,18 @@ export default async function handler(req, res) {
             model: p.model,
             messages: [{ role: "system", content: SYSTEM }, ...history],
             temperature: who === "iroha" ? 0.5 : 0.9,
-            max_tokens: req.body.long ? 3500 : who === "iroha" ? 1000 : 700
+            // reasoning models think before answering and the thinking counts toward this cap; you only pay for what's used
+            max_tokens: req.body.long ? 6000 : who === "iroha" ? 3000 : 2500
           })
         }).finally(() => clearTimeout(timer));
         if (paidRes.ok) {
-          const paidReply = tidy((await paidRes.json())?.choices?.[0]?.message?.content);
+          const data = await paidRes.json(), choice = data?.choices?.[0], msg = choice?.message || {};
+          // the text can come as a plain string or as a list of parts ({ type: "text", text })
+          const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.map(x => (x && (x.text ?? (typeof x === "string" ? x : ""))) || "").join("") : "";
+          const paidReply = tidy(raw);
           if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); return res.status(200).json({ reply: protectBreaks(paidReply) }); }
-          console.error(`[desk chat] ${p.name} returned no text, using backup`);
+          // say why, so the logs show it: "length" means the thinking used up the whole token allowance
+          console.error(`[desk chat] ${p.name} returned no text, using backup. finish_reason=${choice?.finish_reason} message keys=${Object.keys(msg).join(",")} usage=${JSON.stringify(data?.usage || {})}`);
         } else console.error(`[desk chat] ${p.name} error, using backup`, paidRes.status, (await paidRes.text()).slice(0, 300));
       } catch (e) { console.error(`[desk chat] ${p.name} failed, using backup:`, e.message); }
     }
