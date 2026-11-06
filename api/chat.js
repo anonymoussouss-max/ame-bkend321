@@ -1,10 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
-
-// Reads ANTHROPIC_API_KEY from the Vercel environment variables.
-const client = new Anthropic();
-
-// The most capable current Opus model. Switch to "claude-sonnet-5-5" here to cut the cost per reply roughly in half.
-const MODEL = "claude-opus-5-5";
+// AIRouter integration. Uses Node's built-in fetch; no SDK dependency.
+const ENDPOINT = "https://api.airouter.in/v1/chat/completions";
+const MODELS = Object.freeze({
+  kaguya: "anthropic/claude-haiku-5.5",
+  iroha: "anthropic/claude-sonnet-5.5"
+});
 
 // Keeps one request from running up the bill (the endpoint is public).
 const MAX_MESSAGES = 40;
@@ -81,8 +80,9 @@ export default async function handler(req, res) {
   let lines = FALLBACK_LINES[who], crisisLine = null;
 
   if (!Array.isArray(messages)) return res.status(400).json({ error: "No messages received" });
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("[desk chat] missing ANTHROPIC_API_KEY env var");
+  const apiKey = process.env.AIROUTER_API_KEY || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.error("[desk chat] missing AIROUTER_API_KEY env var");
     return res.status(500).json({ error: "API key is missing" });
   }
 
@@ -95,49 +95,62 @@ export default async function handler(req, res) {
     lines = { busy: crisisLine, empty: crisisLine, refusal: crisisLine };
   }
 
-  // Iroha's screen watch attaches one screenshot to the last user message.
-  const { image } = req.body;
-  if (image && ["image/jpeg", "image/png", "image/webp"].includes(image.media_type) && typeof image.data === "string" && image.data.length < 2000000) {
-    const last = history[history.length - 1];
-    if (last.role === "user") last.content = [{ type: "image", source: { type: "base64", media_type: image.media_type, data: image.data } }, { type: "text", text: last.content }];
+  // The desk can send one screenshot or multiple note-page images.
+  const images = Array.isArray(req.body.images) ? req.body.images.slice(0, 8) : [req.body.image];
+  const validImages = images.filter(img => img &&
+    ["image/jpeg", "image/png", "image/webp"].includes(img.media_type) &&
+    typeof img.data === "string" && img.data.length < 2000000);
+  const last = history[history.length - 1];
+  if (last.role === "user" && validImages.length) {
+    last.content = [{ type: "text", text: last.content }, ...validImages.map(img => ({
+      type: "image_url", image_url: { url: "data:" + img.media_type + ";base64," + img.data }
+    }))];
   }
 
   try {
-    const response = await client.beta.messages.create({
-      model: MODEL,
-      // question sets and letters ask for more room with long: true
-      max_tokens: req.body.long ? 8000 : 2000,
-      // Thinking can't be turned off on Opus 5.5; effort keeps chat replies quick and cheap.
-      // Iroha checks working, so she thinks a little harder than Kaguya.
-      output_config: { effort: who === "iroha" ? "medium" : "low" },
-      system: PERSONAS[who],
-      cache_control: { type: "ephemeral" },
-      // If the model declines for safety reasons, the API retries on a suitable fallback model.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      messages: history
+    const upstream = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(55000),
+      body: JSON.stringify({
+        model: MODELS[who],
+        messages: [{ role: "system", content: PERSONAS[who] }, ...history],
+        max_tokens: req.body.long ? 8000 : 2000,
+        stream: false
+      })
     });
-
-    if (response.stop_reason === "refusal") return res.status(200).json({ reply: lines.refusal });
-
-    const reply = response.content
-      .filter(block => block.type === "text")
-      .map(block => block.text)
-      .join("\n")
-      .trim();
-
-    return res.status(200).json({ reply: reply ? protectBreaks(reply) : lines.empty });
+    const response = await upstream.json().catch(() => null);
+    if (!upstream.ok) {
+      console.error("[desk chat] AIRouter request failed", upstream.status);
+      if (crisisLine) return res.status(200).json({ reply: crisisLine });
+      if (upstream.status === 429) return res.status(429).json({ error: "AIRouter is busy or the key spending limit was reached. Check your dashboard." });
+      const errors = {
+        401: "AIRouter rejected the API key. Check the backend environment variable.",
+        402: "AIRouter credits are insufficient for this request. Check your balance or lower the output limit.",
+        403: "AIRouter has not enabled this model for your account.",
+        400: "AIRouter rejected the model or request format. Check the current model catalog."
+      };
+      return res.status(502).json({ error: errors[upstream.status] || "AIRouter could not complete the request.", status: upstream.status });
+    }
+    const choice = response?.choices?.[0];
+    const content = choice?.message?.content;
+    const reply = (typeof content === "string" ? content : Array.isArray(content)
+      ? content.filter(p => p.type === "text").map(p => p.text || "").join("\n") : "").trim();
+    const usage = response?.usage;
+    return res.status(200).json({
+      reply: choice?.message?.refusal ? (crisisLine || lines.refusal) : reply ? protectBreaks(reply) : lines.empty,
+      model: response?.model || MODELS[who],
+      requested_model: MODELS[who],
+      ...(usage ? { usage: {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_cost: usage.total_cost
+      } } : {}),
+      ...(choice?.finish_reason === "length" ? { truncated: true } : {})
+    });
   } catch (error) {
-    if (crisisLine || error instanceof Anthropic.RateLimitError) return res.status(200).json({ reply: lines.busy });
-    if (error instanceof Anthropic.AuthenticationError) {
-      console.error("[desk chat] invalid ANTHROPIC_API_KEY");
-      return res.status(500).json({ error: "Invalid API key" });
-    }
-    if (error instanceof Anthropic.APIError) {
-      console.error("[desk chat] Claude API error", error.status, error.message);
-      return res.status(502).json({ error: "Claude API error", status: error.status, details: error.message });
-    }
-    console.error("[desk chat] unhandled error:", error);
-    return res.status(500).json({ error: error.message });
+    if (crisisLine) return res.status(200).json({ reply: crisisLine });
+    console.error("[desk chat] AIRouter connection error", error.name);
+    return res.status(502).json({ error: "Could not reach AIRouter. Please try again shortly." });
   }
 }
