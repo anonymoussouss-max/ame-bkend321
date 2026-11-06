@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "dependencies": {
-    "@anthropic-ai/sdk": "latest"
+  "engines": {
+    "node": ">=22"
   }
 }
