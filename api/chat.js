@@ -1,7 +1,7 @@
 // Free version: Groq's OpenAI-compatible API, same key as before (OPENAI_API_KEY in Vercel).
 // The model your backend already uses. Swap in any model id from console.groq.com/docs/models.
 const MODEL = "qwen/qwen3.8-27b";
-// AIRouter is used first when AIROUTER_API_KEY is set in Vercel. Set AIROUTER_MODEL there to pick another model,
+// Order: MaxonForge (only if MAXONFORGE_API_KEY is set), then AIRouter, then Gemini, then Groq. AIRouter is used when AIROUTER_API_KEY is set in Vercel. Set AIROUTER_MODEL there to pick another model,
 // or AIROUTER_MODEL_IROHA to give Iroha her own (for example anthropic/claude-sonnet-5.5; it costs more). Note reading stays on the cheap one.
 const AIROUTER_MODEL = "anthropic/claude-haiku-5.5";
 // MaxonForge is tried before AIRouter when MAXONFORGE_API_KEY is set. Set MAXONFORGE_MODEL to pick another model.
@@ -72,7 +72,7 @@ Lectures come back on days 1, 3, 5, 7, 14, 30 and 60. A new lecture is due tomor
 A spaced-revision quiz is five questions, one at a time, hardest ideas first, spread across the whole lecture or whatever notes you have. Wait for each attempt before giving its answer, and never reveal later ones. Mix retrieval, a derivation, an application, a misconception check and a transfer problem where they fit the lecture. Keep track of which answers were independent, hinted or explained. At the end, recommend "Recalled independently" only if the core ideas and reasoning came back without help; otherwise recommend "Needs another review" and name the weak part.
 Due work comes before new topics, oldest first, about ten minutes a topic, standing up between topics, and whatever doesn't fit rolls to tomorrow. Keep using active recall, blurting, Feynman explanations, self-tests and interleaving.
 Logged misses have their own schedule: tomorrow, then 3, 7, 14 and 30 days after each success, then retired; a failed review starts again tomorrow. The flashcard deck uses 1, 2, 4, 8, 16, 32 and 60 days, and Shaky or Missed brings a card back tomorrow. Keep these separate from lectures.
-During a break set on the site, all of these pause: nothing comes due, and they resume where they stopped, with anything already overdue spread out at two topics a subject a day.
+During a break set on the site, all of these pause: nothing comes due, and they resume where they stopped, with anything already overdue spread out at no more than two topics a subject and four in all per day. A short break chosen in the top bar is different: it just pauses for a few minutes.
 If notes are unavailable, say what you can see and ask for what's missing; never claim to have read a whole PDF from one image. Never invent reviewed items, mastery or elapsed days.
 
 WELLBEING
@@ -220,7 +220,7 @@ export default async function handler(req, res) {
           // only the answer: thinking or reasoning parts are never shown
           const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter(x => typeof x === "string" || !x?.type || /^(output_)?text$/.test(x.type)).map(x => typeof x === "string" ? x : x.text || "").join("") : "";
           const paidReply = tidy(raw);
-          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); res.setHeader?.("X-Provider", p.name); return res.status(200).json({ reply: protectBreaks(paidReply), provider: p.name }); }
+          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); res.setHeader?.("X-Provider", p.name); return res.status(200).json({ reply: protectBreaks(paidReply), provider: p.name, model: p.model }); }
           // say why, so the logs show it: "length" means the thinking used up the whole token allowance
           console.error(`[desk chat] ${p.name} returned no text, using backup. finish_reason=${choice?.finish_reason} message keys=${Object.keys(msg).join(",")} usage=${JSON.stringify(data?.usage || {})}`);
         } else console.error(`[desk chat] ${p.name} error, using backup`, paidRes.status, (await paidRes.text()).slice(0, 300));
@@ -259,7 +259,7 @@ export default async function handler(req, res) {
         if (gemRes.ok) {
           const parts = (await gemRes.json())?.candidates?.[0]?.content?.parts || [];
           const gemReply = tidy(parts.filter(p => !p.thought).map(p => p.text || "").join(""));
-          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); res.setHeader?.("X-Provider", "Gemini"); return res.status(200).json({ reply: protectBreaks(gemReply), provider: "Gemini" }); }
+          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); res.setHeader?.("X-Provider", "Gemini"); return res.status(200).json({ reply: protectBreaks(gemReply), provider: "Gemini", model: process.env.GEMINI_MODEL || GEMINI_MODEL }); }
           console.error("[desk chat] Gemini returned no text, using Groq");
         } else console.error("[desk chat] Gemini error, using Groq", gemRes.status, (await gemRes.text()).slice(0, 300));
       } catch (e) { console.error("[desk chat] Gemini failed, using Groq:", e.message); }
@@ -291,7 +291,7 @@ export default async function handler(req, res) {
     const reply = tidy(data?.choices?.[0]?.message?.content);
 
     res.setHeader?.("X-Provider", "Groq");
-    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty, provider: "Groq" });
+    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty, provider: reply ? "Groq" : "", model: reply ? (hasImage ? process.env.GROQ_VISION_MODEL : process.env.GROQ_MODEL || MODEL) : "" });
   } catch (err) {
     console.error("[desk chat] unhandled error:", err);
     if (crisisLine) return res.status(200).json({ reply: crisisLine });
