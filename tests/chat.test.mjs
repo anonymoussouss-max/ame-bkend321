@@ -167,3 +167,12 @@ test("the source still holds the response contract and protections", () => {
   assert.match(source, /const CRISIS_RE = /);
   assert.match(source, /function protectBreaks/);
 });
+
+test("both briefs carry the 22 Nov 2026 schedule rules: desk admin, 1:30 AM bedtime, difficult days, honest goals", () => {
+  for (const p of [IROHA, KAGUYA]) {
+    for (const rule of [/MSBTE Computer Engineering diploma/, /JEE Advanced depth by choice/, /never assume the diploma qualifies/, /\[Desk admin \.\.\.\]/, /never claim a change you didn't write a line for/, /never log or invent them/, /1:30 AM bedtime/, /Six hours is a complete normal day/, /Neither of you grants or refuses rest/]) assert.match(p, rule, String(rule));
+    assert.doesNotMatch(p, /medication makes them sleep/);
+    assert.doesNotMatch(p, /You can't click, log, mark, schedule or change anything/);
+  }
+  for (const rule of [/fifteen minutes of Physics/, /can be the whole day/, /a lighter day or a full day off/, /ask one gentle question/, /no authority over their rest/]) assert.match(IROHA, rule, String(rule));
+});
