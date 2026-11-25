@@ -126,6 +126,8 @@ const LINES = {
   iroha: { busy: "Too many requests at once. Give it a few seconds, then ask again.", empty: "No answer came through. Ask again." }
 };
 
+const PROOF_READ = "You transcribe photos of a student's handwritten solution working for a closed-book exam. Transcribe exactly what is written, line by line, in reading order. Never correct, complete, solve, judge or improve anything. Mark any character or symbol you can't read with certainty as [?], and note ambiguous notation (signs, subscripts, exponents, decimal points) in brackets. Describe diagrams briefly as [diagram: ...] and crossed-out work as [struck: ...]. Plain text only.";
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -170,8 +172,10 @@ export default async function handler(req, res) {
     }
 
     // reading note pages needs no character: a short brief saves about 1500 tokens per request
-    const bulk = !!(req.body.bulk && hasImage);
-    const SYSTEM = bulk ? "You transcribe pages of a student's own handwritten or printed lecture notes into concise plain text. Follow the user's format exactly. No commentary." : PERSONAS[who];
+    // Photo proofs: a faithful transcription of handwritten working. It never corrects, completes or judges; the desk marks separately.
+    const proofRead = req.body.purpose === "proof-read" && hasImage;
+    const bulk = !!((req.body.bulk || proofRead) && hasImage);
+    const SYSTEM = proofRead ? PROOF_READ : bulk ? "You transcribe pages of a student's own handwritten or printed lecture notes into concise plain text. Follow the user's format exactly. No commentary." : PERSONAS[who];
     const callGroq = () => fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },

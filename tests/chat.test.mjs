@@ -176,3 +176,15 @@ test("both briefs carry the 22 Nov 2026 schedule rules: desk admin, 1:30 AM bedt
   }
   for (const rule of [/fifteen minutes of Physics/, /can be the whole day/, /a lighter day or a full day off/, /ask one gentle question/, /no authority over their rest/]) assert.match(IROHA, rule, String(rule));
 });
+
+test("proof photos get a faithful transcription brief, never a persona or the concise notes brief", async () => {
+  const env = { AIROUTER_API_KEY: "a", AIROUTER_MODEL_IROHA: "big", GROQ_VISION_MODEL: "vision" };
+  const ok = { airouter: () => chatOk("x = 2 [?]") };
+  const img = { media_type: "image/jpeg", data: "aGk=" };
+  const r = await call({ env, body: { character: "iroha", purpose: "proof-read", images: [img], messages: msgs("[proof transcription, not typed by me] transcribe") }, routes: ok });
+  assert.match(sys(r.calls[0]), /^You transcribe photos of a student's handwritten solution working/);
+  assert.match(sys(r.calls[0]), /Never correct, complete, solve, judge/);
+  assert.equal(r.calls[0].body.model, "anthropic/claude-haiku-5.5");
+  const noImg = await call({ env, body: { character: "iroha", purpose: "proof-read", messages: msgs("q") }, routes: ok });
+  assert.doesNotMatch(sys(noImg.calls[0]), /^You transcribe photos/);
+});
