@@ -242,7 +242,7 @@ export default async function handler(req, res) {
           // only the answer: thinking or reasoning parts are never shown
           const raw = typeof msg.content === "string" ? msg.content : Array.isArray(msg.content) ? msg.content.filter(x => typeof x === "string" || !x?.type || /^(output_)?text$/.test(x.type)).map(x => typeof x === "string" ? x : x.text || "").join("") : "";
           const paidReply = tidy(raw);
-          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); res.setHeader?.("X-Provider", p.name); return res.status(200).json({ reply: protectBreaks(paidReply), provider: p.name, model: p.model }); }
+          if (paidReply) { console.log(`[desk chat] ${p.name} answered in`, Date.now() - started, "ms"); res.setHeader?.("X-Provider", p.name); return res.status(200).json({ reply: protectBreaks(paidReply), provider: p.name, model: p.model, ...(data?.usage ? { usage: data.usage } : {}) }); }
           // say why, so the logs show it: "length" means the thinking used up the whole token allowance
           console.error(`[desk chat] ${p.name} returned no text, using backup. finish_reason=${choice?.finish_reason} message keys=${Object.keys(msg).join(",")} usage=${JSON.stringify(data?.usage || {})}`);
         } else console.error(`[desk chat] ${p.name} error, using backup`, paidRes.status, (await paidRes.text()).slice(0, 300));
@@ -279,9 +279,9 @@ export default async function handler(req, res) {
           })
         }).finally(() => clearTimeout(timer));
         if (gemRes.ok) {
-          const parts = (await gemRes.json())?.candidates?.[0]?.content?.parts || [];
+          const gemData = await gemRes.json(), parts = gemData?.candidates?.[0]?.content?.parts || [];
           const gemReply = tidy(parts.filter(p => !p.thought).map(p => p.text || "").join(""));
-          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); res.setHeader?.("X-Provider", "Gemini"); return res.status(200).json({ reply: protectBreaks(gemReply), provider: "Gemini", model: process.env.GEMINI_MODEL || GEMINI_MODEL }); }
+          if (gemReply) { console.log("[desk chat] Gemini answered in", Date.now() - started, "ms"); res.setHeader?.("X-Provider", "Gemini"); return res.status(200).json({ reply: protectBreaks(gemReply), provider: "Gemini", model: process.env.GEMINI_MODEL || GEMINI_MODEL, ...(gemData?.usageMetadata ? { usage: gemData.usageMetadata } : {}) }); }
           console.error("[desk chat] Gemini returned no text, using Groq");
         } else console.error("[desk chat] Gemini error, using Groq", gemRes.status, (await gemRes.text()).slice(0, 300));
       } catch (e) { console.error("[desk chat] Gemini failed, using Groq:", e.message); }
@@ -313,7 +313,7 @@ export default async function handler(req, res) {
     const reply = tidy(data?.choices?.[0]?.message?.content);
 
     res.setHeader?.("X-Provider", "Groq");
-    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty, provider: reply ? "Groq" : "", model: reply ? (hasImage ? process.env.GROQ_VISION_MODEL : process.env.GROQ_MODEL || MODEL) : "" });
+    return res.status(200).json({ reply: reply ? protectBreaks(reply) : crisisLine || LINES[who].empty, provider: reply ? "Groq" : "", model: reply ? (hasImage ? process.env.GROQ_VISION_MODEL : process.env.GROQ_MODEL || MODEL) : "", ...(reply && data?.usage ? { usage: data.usage } : {}) });
   } catch (err) {
     console.error("[desk chat] unhandled error:", err);
     if (crisisLine) return res.status(200).json({ reply: crisisLine });

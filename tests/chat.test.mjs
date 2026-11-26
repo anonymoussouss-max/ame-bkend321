@@ -188,3 +188,13 @@ test("proof photos get a faithful transcription brief, never a persona or the co
   const noImg = await call({ env, body: { character: "iroha", purpose: "proof-read", messages: msgs("q") }, routes: ok });
   assert.doesNotMatch(sys(noImg.calls[0]), /^You transcribe photos/);
 });
+
+test("token usage is passed back when the provider reports it, and left out when it doesn't", async () => {
+  const env = { AIROUTER_API_KEY: "a" };
+  const withUsage = await call({ env, body: { character: "iroha", messages: msgs("hi") }, routes: { airouter: () => json({ choices: [{ message: { content: "hey" }, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 3 } }) } });
+  assert.deepEqual(withUsage.res.out.usage, { prompt_tokens: 12, completion_tokens: 3 });
+  const without = await call({ env, body: { character: "iroha", messages: msgs("hi") }, routes: { airouter: () => chatOk("hey") } });
+  assert.equal("usage" in without.res.out, false);
+  const groq = await call({ body: { character: "iroha", messages: msgs("hi") }, routes: { groq: () => json({ choices: [{ message: { content: "yo" } }], usage: { total_tokens: 9 } }) } });
+  assert.deepEqual(groq.res.out.usage, { total_tokens: 9 });
+});
