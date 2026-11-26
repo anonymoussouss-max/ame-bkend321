@@ -128,6 +128,8 @@ const LINES = {
 
 const PROOF_READ = "You transcribe photos of a student's handwritten solution working for a closed-book exam. Transcribe exactly what is written, line by line, in reading order. Never correct, complete, solve, judge or improve anything. Mark any character or symbol you can't read with certainty as [?], and note ambiguous notation (signs, subscripts, exponents, decimal points) in brackets. Describe diagrams briefly as [diagram: ...] and crossed-out work as [struck: ...]. Plain text only.";
 
+const PROOF_MARK = "You mark a student's closed-book proof from photos of their handwritten working and a transcription of those photos. Grade what the student actually wrote. Check the transcription against the photos. Never invent doubt about writing that is clear in the photo: a clearly written wrong digit is the student's slip, not a misreading. Where a photo and the transcription differ at a specific sign, digit, exponent, subscript or diagram, or the photo can't settle what was written, name the exact spot, what the transcription says and what the photo shows, and treat it as possibly changing the verdict rather than guessing. Follow the requested output format exactly. No persona, greeting or commentary outside it.";
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -175,7 +177,9 @@ export default async function handler(req, res) {
     // Photo proofs: a faithful transcription of handwritten working. It never corrects, completes or judges; the desk marks separately.
     const proofRead = req.body.purpose === "proof-read" && hasImage;
     const bulk = !!((req.body.bulk || proofRead) && hasImage);
-    const SYSTEM = proofRead ? PROOF_READ : bulk ? "You transcribe pages of a student's own handwritten or printed lecture notes into concise plain text. Follow the user's format exactly. No commentary." : PERSONAS[who];
+    // Photo-proof marking: the photos come with the transcription so the grader can check one against the other.
+    const proofMark = req.body.purpose === "proof-mark" && hasImage;
+    const SYSTEM = proofRead ? PROOF_READ : proofMark ? PROOF_MARK : bulk ? "You transcribe pages of a student's own handwritten or printed lecture notes into concise plain text. Follow the user's format exactly. No commentary." : PERSONAS[who];
     const callGroq = () => fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },

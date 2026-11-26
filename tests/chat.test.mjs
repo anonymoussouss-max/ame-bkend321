@@ -198,3 +198,15 @@ test("token usage is passed back when the provider reports it, and left out when
   const groq = await call({ body: { character: "iroha", messages: msgs("hi") }, routes: { groq: () => json({ choices: [{ message: { content: "yo" } }], usage: { total_tokens: 9 } }) } });
   assert.deepEqual(groq.res.out.usage, { total_tokens: 9 });
 });
+
+test("proof marking with photos gets the marking brief: no invented doubt, real discrepancies named", async () => {
+  const env = { AIROUTER_API_KEY: "a" };
+  const img = { media_type: "image/png", data: "aGk=" };
+  const r = await call({ env, body: { character: "iroha", purpose: "proof-mark", images: [img], messages: msgs("[proof marking request, not typed by me] mark") }, routes: { airouter: () => chatOk("{}") } });
+  assert.match(sys(r.calls[0]), /^You mark a student's closed-book proof from photos/);
+  assert.match(sys(r.calls[0]), /Never invent doubt about writing that is clear in the photo/);
+  assert.match(sys(r.calls[0]), /name the exact spot, what the transcription says and what the photo shows/);
+  assert.equal(r.calls[0].body.messages[1].content.length, 2, "text plus one photo");
+  const noImg = await call({ env, body: { character: "iroha", purpose: "proof-mark", messages: msgs("q") }, routes: { airouter: () => chatOk("{}") } });
+  assert.doesNotMatch(sys(noImg.calls[0]), /^You mark a student's/);
+});
